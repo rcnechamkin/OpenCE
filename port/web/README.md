@@ -15,9 +15,9 @@ the site. Nothing is uploaded.
 
 - A desktop browser: Chrome or Edge, or Firefox. Safari 17 or later may
   work. The page checks what it needs and says what is missing.
-- A 64-bit browser that gives the page 2.1 GB of memory (the Xbox's memory
-  window is at its top: "How it operates"). Desktop browsers do; a phone's
-  may not (the page says so), and iPhones are untried.
+- A browser that gives the page 384 MB of memory (the game's heap, and the
+  Xbox's memory window above it: "How it operates"). Desktop browsers do;
+  phones are untried (the page says when a browser cannot).
 - About 3 GB of the browser's storage: the maps (about 2 GB), and the
   game's copies of the maps it played (up to about 800 MB, as on the Xbox's
   hard disk), and the disc image (`.iso` or `.xiso`) on the computer.
@@ -229,9 +229,16 @@ multiply-adds). `tools/web_build.py` writes the graph.
   app (its touch overlay, its window, its files): in a browser, the menus,
   the mouse and the keyboard are the desktop's.
 - **Memory.** The game expects the Xbox's memory window at `0x80000000`
-  (`port/linux/src/platform.h`), 128 MB as on Android. The WebAssembly
-  memory is made `0x88000000` bytes, so that the window is its top 128 MB;
-  `port/web/src/web_main.c` keeps the C heap below it. `xbox_memory.c`
+  (`port/linux/src/platform.h`), 128 MB as on Android. The web build moves
+  the window down to `0x10000000` (`port/linux/include/halo_port_capacity.h`)
+  and makes the WebAssembly memory `0x18000000` bytes, so that the window is
+  its top 128 MB; `port/web/src/web_main.c` keeps the C heap below it, 256 MB
+  where the heaviest levels use about 136. A map's tags are linked to the
+  Xbox's tag cache (`0x803A6000`): every pointer in its tags and structure
+  bsps is moved to the web build's window as they load, as the tag
+  validator reaches it (`port/linux/game/tag_validate.c`, "moving a map's
+  pointers"). Saved games of builds with the window at `0x80000000` do not
+  load in this one: the game state holds pointers. `xbox_memory.c`
   clears a block where it would map fresh pages, and only remembers
   protection.
 - **Threads.** Emscripten's pthreads, with `PROXY_TO_PTHREAD`: the game's

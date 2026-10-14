@@ -714,7 +714,8 @@ long tag_loaded(
 void cache_files_enable_writes(
 	void)
 {
-	XPhysicalProtect((void *)0x803A6000, 0x01600000, PAGE_READWRITE);
+	/* port: the tag cache where this build's memory window has it (halo_port_capacity.h) */
+	XPhysicalProtect((void *)HALO_PORT_WINDOW_ADDRESS(HALO_PORT_XBOX_TAG_CACHE_ADDRESS), 0x01600000, PAGE_READWRITE);
 
 	return;
 }
@@ -722,7 +723,8 @@ void cache_files_enable_writes(
 void cache_files_disable_writes(
 	void)
 {
-	XPhysicalProtect((void *)0x803A6000, 0x01600000, PAGE_READONLY);
+	/* port: the tag cache where this build's memory window has it (halo_port_capacity.h) */
+	XPhysicalProtect((void *)HALO_PORT_WINDOW_ADDRESS(HALO_PORT_XBOX_TAG_CACHE_ADDRESS), 0x01600000, PAGE_READONLY);
 	XPhysicalProtect(
 		cache_file_globals.tag_header->vertex_buffers,
 		cache_file_globals.tag_header->vertex_buffer_count * 12,
@@ -1245,6 +1247,10 @@ long scenario_tags_load(
 
 				return NONE;
 			}
+			/* port: the tags are linked to the Xbox's tag cache; where this
+			build's is elsewhere their header's and table's pointers move to it
+			(the rest as they are checked: port/linux/game/tag_validate.c) */
+			tag_validate_relocate_tags(tag_cache_base_address, cache_file_globals.header.tag_data_size);
 			if (!cache_file_tag_header_verify(
 				tag_cache_base_address,
 				cache_file_globals.header.tag_data_size,
@@ -1356,11 +1362,17 @@ boolean scenario_structure_bsp_load(
 			return FALSE;
 		}
 	}
-	else if (cache_file_globals.header.tag_data_size < 0 ||
-		cache_file_globals.header.tag_data_size > TAG_CACHE_SIZE ||
-		!cache_file_structure_bsp_reference_verify(reference))
+	else
 	{
-		return FALSE;
+		/* port: where the bsp loads, in this build's tag cache
+		(port/linux/game/tag_validate.c, tag_validate_relocated) */
+		reference->base_address = tag_validate_relocated(reference->base_address);
+		if (cache_file_globals.header.tag_data_size < 0 ||
+			cache_file_globals.header.tag_data_size > TAG_CACHE_SIZE ||
+			!cache_file_structure_bsp_reference_verify(reference))
+		{
+			return FALSE;
+		}
 	}
 
 	tag_cache_base_address = physical_memory_get_tag_cache_base_address();
@@ -1391,8 +1403,11 @@ boolean scenario_structure_bsp_load(
 		}
 
 		/* port: a bsp that did not all read, or whose header's pointers
-		leave what was read, is not loaded */
+		leave what was read, is not loaded (its header's pointers moved to
+		this build's tag cache first, as the tags' were) */
 		structure_bsp_header = reference->base_address;
+		if (read_complete == TRUE)
+			tag_validate_relocate_structure_bsp(reference->base_address, reference->file_size);
 		if (read_complete != TRUE ||
 			structure_bsp_header->signature != CACHE_FILE_STRUCTURE_BSP_HEADER_SIGNATURE ||
 			!cache_file_region_contains(

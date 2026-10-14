@@ -2,9 +2,10 @@
 
 The web port (port/web/README.md) runs the game as WebAssembly in a
 browser. wasm32 is an ILP32 target (32-bit int, long and pointers), as the
-game's data formats need, and the Xbox window at 0x80000000 lies inside the
-WebAssembly memory, which is made 0x88000000 bytes so that the window is its
-top 128 MB (port/linux/src/platform.h). This graph builds
+game's data formats need, and the memory window (the Xbox's at 0x80000000,
+moved down to 0x10000000: port/linux/include/halo_port_capacity.h) lies
+inside the WebAssembly memory, which is made 0x18000000 bytes so that the
+window is its top 128 MB (port/linux/src/platform.h). This graph builds
 
 - the game sources and the port's game units (port/linux/game);
 - the platform layer shared with Linux (port/linux/src), with the OpenGL ES
@@ -63,9 +64,9 @@ SITE_FONTS = ["OpenCE-Regular.ttf", "Overpass-750.ttf"]
 WATCH_HASH = ANDROID_DIR / "host" / "host_watch_hash.c"
 
 # The Xbox window (port/linux/src/platform.h) is the top 128 MB of the
-# WebAssembly memory, 0x80000000 to 0x88000000; the C heap has everything
+# WebAssembly memory, 0x10000000 to 0x18000000; the C heap has everything
 # below it (port/web/src/web_main.c).
-WEB_MEMORY_BYTES = 0x88000000
+WEB_MEMORY_BYTES = 0x18000000
 
 # The ABI the game was written for, as the other builds reproduce it
 # (tools/linux_build.py LINUX_ABI_FLAGS): 16-bit wchar_t, MSVC's extensions,

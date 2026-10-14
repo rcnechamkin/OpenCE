@@ -213,6 +213,10 @@ static struct
 /* a bit for each byte of the tag cache that a tag's root, block or data
 holds */
 static unsigned long tag_validate_claims[CLAIM_WORDS];
+/* a bit for each word of the tag cache inside a tag's data (script syntax, strings,
+compressed animations and sounds, ...): bytes the schema leaves opaque, which the
+sweep for pointers it doesn't list stays out of (relocate_shaped_pointers) */
+static unsigned long tag_validate_opaque_words[CLAIM_WORDS / 4 + 1];
 
 static char const tag_validate_empty_name[] = "";
 
@@ -341,6 +345,164 @@ static void validation_message(
 	tag_validate_report(message);
 }
 
+/* ---------- moving a map's pointers
+
+A map's tags and structure bsps are linked to the Xbox's tag cache
+(0x803A6000): every pointer in them is an address in it. Where this build's
+tag cache is elsewhere (the web build's memory window: halo_port_capacity.h)
+each such pointer is moved as the walk reaches it, before it is checked; the
+tags' header and table, and a bsp's header, are moved before anything reads
+them (tag_validate_relocate_tags, tag_validate_relocate_structure_bsp). A
+pointer that is not into the Xbox's tag cache, or that was moved already, is
+left as it is: moving one twice changes nothing. In the other builds nothing
+moves. */
+
+void *tag_validate_relocated(
+	void const *address)
+{
+	unsigned long value = (unsigned long)address;
+
+	if (HALO_PORT_WINDOW_BASE != HALO_PORT_XBOX_WINDOW_BASE &&
+		value >= HALO_PORT_XBOX_TAG_CACHE_ADDRESS &&
+		value - HALO_PORT_XBOX_TAG_CACHE_ADDRESS < (unsigned long)TAG_CACHE_SIZE)
+	{
+		return (void *)HALO_PORT_WINDOW_ADDRESS(value);
+	}
+
+	return (void *)address;
+}
+
+/* whether value is an address in this build's tag cache */
+static boolean relocated_into_tag_cache(
+	unsigned long value)
+{
+	unsigned long tag_cache = HALO_PORT_WINDOW_ADDRESS(HALO_PORT_XBOX_TAG_CACHE_ADDRESS);
+
+	return value >= tag_cache && value - tag_cache < (unsigned long)TAG_CACHE_SIZE;
+}
+
+/* What the schemas do not name is moved after the walk: the blocks and data
+of what the game takes as the map has it (a particle system's, the
+globals', the scenario's), and a model part's vertex buffer's offset. Each
+word of size bytes at base shaped as such a pointer moves: an address in the
+Xbox's tag cache, four-byte aligned, after a count, size or offset (no more
+than MAXIMUM_RELOCATED_COUNT) and before a block's or data's definition
+(none, in a map) or a pointer moved already. The tags' other words that
+fall in the Xbox's tag cache are numbers, in compressed animations and
+sounds, which that shape does not fit. Returns how many moved. */
+enum
+{
+	MAXIMUM_RELOCATED_COUNT = 0x01000000,
+};
+
+static boolean is_opaque(void const *address);
+
+static boolean is_group_tag(
+	unsigned long value)
+{
+	short byte_index;
+
+	if (value == 0xFFFFFFFFUL)
+		return TRUE;
+	for (byte_index = 0; byte_index < 4; byte_index++, value >>= 8)
+	{
+		unsigned char character = (unsigned char)value;
+
+		if (character != ' ' && character != '!' && (character < '0' || character > '9') &&
+			(character < 'a' || character > 'z'))
+		{
+			return FALSE;
+		}
+	}
+	return TRUE;
+}
+
+static long relocate_shaped_pointers(
+	byte *base,
+	long size)
+{
+	unsigned long *words = (unsigned long *)base;
+	long word_count = size / (long)sizeof(unsigned long);
+	long index;
+	long moved = 0;
+
+	if (HALO_PORT_WINDOW_BASE == HALO_PORT_XBOX_WINDOW_BASE)
+		return 0;
+	for (index = 1; index + 1 < word_count; index++)
+	{
+		unsigned long value = words[index];
+		unsigned long next = words[index + 1];
+
+		if (value % 4 || value < HALO_PORT_XBOX_TAG_CACHE_ADDRESS ||
+			value - HALO_PORT_XBOX_TAG_CACHE_ADDRESS >= (unsigned long)TAG_CACHE_SIZE ||
+			is_opaque(&words[index]))
+		{
+			continue;
+		}
+		/* a block or data: a count before it, and after it nothing or another pointer; or
+		a tag reference's name: a group tag before it, a short length and a datum index after */
+		if ((words[index - 1] > MAXIMUM_RELOCATED_COUNT || (next && !relocated_into_tag_cache(next))) &&
+			!(index + 2 < word_count && is_group_tag(words[index - 1]) && next < 256 &&
+				(words[index + 2] == 0xFFFFFFFFUL || (words[index + 2] & 0xFFFF0000UL) >= 0xE0000000UL)))
+		{
+			continue;
+		}
+		words[index] = (unsigned long)tag_validate_relocated((void *)value);
+		moved++;
+	}
+
+	return moved;
+}
+
+void tag_validate_relocate_tags(
+	void *tag_header,
+	long tag_data_size)
+{
+	struct tag_validate_header *header = tag_header;
+	unsigned long table_offset;
+	long absolute_index;
+
+	if (tag_data_size < (long)sizeof(*header))
+		return;
+	header->instances = tag_validate_relocated(header->instances);
+	header->vertex_buffers = tag_validate_relocated(header->vertex_buffers);
+	header->index_buffers = tag_validate_relocated(header->index_buffers);
+
+	/* (the table's entries, where the table lies in the tags: what it does
+	not, tag_validate_tags refuses) */
+	table_offset = (unsigned long)header->instances - (unsigned long)header;
+	if ((unsigned long)header->instances < (unsigned long)header || header->tag_count <= 0 ||
+		header->tag_count > UNSIGNED_SHORT_MAX || table_offset > (unsigned long)tag_data_size ||
+		(unsigned long)header->tag_count * sizeof(struct tag_validate_instance) > (unsigned long)tag_data_size - table_offset)
+	{
+		return;
+	}
+	for (absolute_index = 0; absolute_index < header->tag_count; absolute_index++)
+	{
+		struct tag_validate_instance *instance = &header->instances[absolute_index];
+
+		instance->name = tag_validate_relocated(instance->name);
+		instance->base_address = tag_validate_relocated(instance->base_address);
+	}
+
+	return;
+}
+
+void tag_validate_relocate_structure_bsp(
+	void *base,
+	long size)
+{
+	struct tag_validate_structure_bsp_header *bsp_header = base;
+
+	if (size < (long)sizeof(*bsp_header))
+		return;
+	bsp_header->base_address = tag_validate_relocated(bsp_header->base_address);
+	bsp_header->vertex_buffers = tag_validate_relocated(bsp_header->vertex_buffers);
+	bsp_header->index_buffers = tag_validate_relocated(bsp_header->index_buffers);
+
+	return;
+}
+
 /* whether size bytes at address lie in the region being checked */
 static boolean region_contains(
 	struct tag_validation *validation,
@@ -352,6 +514,42 @@ static boolean region_contains(
 	return (unsigned long)address >= (unsigned long)validation->region &&
 		offset <= validation->region_size &&
 		size <= validation->region_size - offset;
+}
+
+/* marks the words at the tag cache's offsets [first, end) opaque, or not */
+static void mark_opaque(
+	unsigned long first,
+	unsigned long end,
+	boolean opaque)
+{
+	unsigned long word;
+
+	for (word = first / 4; word < (end + 3) / 4 && word / CLAIM_BITS < NUMBEROF(tag_validate_opaque_words); word++)
+	{
+		if (opaque)
+			tag_validate_opaque_words[word / CLAIM_BITS] |= 1UL << (word % CLAIM_BITS);
+		else
+			tag_validate_opaque_words[word / CLAIM_BITS] &= ~(1UL << (word % CLAIM_BITS));
+	}
+}
+
+static boolean is_opaque(
+	void const *address)
+{
+	unsigned long word = (unsigned long)((byte const *)address - (byte const *)tag_validate_globals.header) / 4;
+
+	return word / CLAIM_BITS < NUMBEROF(tag_validate_opaque_words) &&
+		(tag_validate_opaque_words[word / CLAIM_BITS] & (1UL << (word % CLAIM_BITS))) != 0;
+}
+
+void tag_validate_opaque(
+	void const *address,
+	unsigned long size)
+{
+	unsigned long first = (unsigned long)((byte const *)address - (byte const *)tag_validate_globals.header);
+
+	if ((byte const *)address >= (byte const *)tag_validate_globals.header && first < tag_validate_globals.tag_cache_size)
+		mark_opaque(first, first + size, TRUE);
 }
 
 /* marks size bytes at address (in the tag cache, as the region is) as a
@@ -408,6 +606,7 @@ static void unclaim(
 
 	if (first > tag_validate_globals.tag_cache_size || size > tag_validate_globals.tag_cache_size - first)
 		return;
+	mark_opaque(first, end, FALSE);
 	for (bit = first; bit < end; )
 	{
 		if (bit % CLAIM_BITS == 0 && end - bit >= CLAIM_BITS)
@@ -584,6 +783,7 @@ static void validate_block_extent(
 {
 	struct tag_schema_definition const *definition = field->definition;
 
+	block->address = tag_validate_relocated(block->address);
 	block->definition = NULL;
 	if (block->count < 0)
 	{
@@ -643,12 +843,19 @@ static void validate_data_extent(
 		}
 		return;
 	}
+	data->address = tag_validate_relocated(data->address);
 	if (data->size &&
 		(!region_contains(validation, data->address, data->size) || !claim(data->address, data->size)))
 	{
 		tag_validate_refuse(validation, "has %ld bytes at %08lx, outside the tags or overlapping another's",
 			data->size, (unsigned long)data->address);
 		return;
+	}
+	if (data->size)
+	{
+		unsigned long first = (unsigned long)((byte *)data->address - (byte *)tag_validate_globals.header);
+
+		mark_opaque(first, first + data->size, TRUE);
 	}
 	if (!data->size)
 		data->address = NULL;
@@ -711,6 +918,7 @@ static void validate_value(
 	{
 		struct tag_reference *reference = (struct tag_reference *)address;
 
+		reference->name = tag_validate_relocated(reference->name);
 		/* (a reference to no tag often has a name pointer that is not one,
 		in the retail maps too: only one to a tag counts as a correction) */
 		if (!string_valid(validation, reference->name))
@@ -1051,7 +1259,7 @@ static boolean validate_buffers(
 			vertex_buffers + index * BUFFER_SIZE :
 			index_buffers + (index - vertex_buffer_count) * BUFFER_SIZE;
 		/* (the buffer's Data, its bytes' address before it is registered) */
-		void *data = *(void **)(buffer + 4);
+		void *data = *(void **)(buffer + 4) = tag_validate_relocated(*(void **)(buffer + 4));
 
 		if (!region_contains(validation, data, 1))
 		{
@@ -1158,6 +1366,7 @@ static void validation_begin(
 	tag_validate_globals.custom_edition = custom_edition;
 	snprintf(tag_validate_globals.map_name, sizeof(tag_validate_globals.map_name), "%s", map_name);
 	memset(tag_validate_claims, 0, sizeof(tag_validate_claims));
+	memset(tag_validate_opaque_words, 0, sizeof(tag_validate_opaque_words));
 	validation_new(validation, tag_header, (unsigned long)tag_data_size);
 
 	return;
@@ -1172,6 +1381,7 @@ boolean tag_validate_tags(
 	struct tag_validate_header *header = tag_header;
 	struct tag_validation validation;
 
+	tag_validate_relocate_tags(tag_header, tag_data_size);
 	validation_begin(&validation, tag_header, tag_data_size, TAG_CACHE_SIZE, FALSE, map_name);
 	tag_validate_globals.file_ranges[0].offset = 0;
 	tag_validate_globals.file_ranges[0].size = file_length < 0 ? 0 : (unsigned long)file_length;
@@ -1200,7 +1410,11 @@ boolean tag_validate_tags(
 		return FALSE;
 	}
 
-	return validate_tag_table(&validation, header->instances, header->tag_count);
+	if (!validate_tag_table(&validation, header->instances, header->tag_count))
+		return FALSE;
+	relocate_shaped_pointers(tag_header, tag_data_size);
+
+	return TRUE;
 }
 
 boolean tag_validate_custom_edition_tags(
@@ -1255,6 +1469,7 @@ boolean tag_validate_structure_bsp(
 	struct tag_validation validation;
 	unsigned long tag_cache_offset = (unsigned long)((byte *)base - (byte *)header);
 
+	tag_validate_relocate_structure_bsp(base, size);
 	validation_new(&validation, base, (unsigned long)size);
 	validation.tag_index = tag_index;
 	if (!header || !instance || instance->group_tag != STRUCTURE_BSP_GROUP_TAG ||
@@ -1292,6 +1507,8 @@ boolean tag_validate_structure_bsp(
 			validate_tag(&validation, tag_index, bsp_header->base_address, group->definition, _pass_checks);
 	}
 	tag_validate_globals.corrections += validation.corrections;
+	if (!validation.refused)
+		relocate_shaped_pointers(base, size);
 
 	return !validation.refused;
 }

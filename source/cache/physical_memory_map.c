@@ -45,7 +45,8 @@ symbols in this file:
 #define GAME_STATE_BASE_ADDRESS HALO_PORT_GAME_STATE_BASE_ADDRESS
 #define GAME_STATE_SIZE HALO_PORT_GAME_STATE_SIZE
 #define GAME_STATE_VERIFY_SIZE HALO_PORT_GAME_STATE_CPU_SIZE
-#define TAG_CACHE_BASE_ADDRESS 0x803A6000
+/* port: where this build's memory window has the Xbox's 0x803A6000 (halo_port_capacity.h) */
+#define TAG_CACHE_BASE_ADDRESS HALO_PORT_WINDOW_ADDRESS(HALO_PORT_XBOX_TAG_CACHE_ADDRESS)
 /* port: the native builds' larger texture cache (halo_port_capacity.h) */
 #define TEXTURE_CACHE_SIZE HALO_PORT_TEXTURE_CACHE_SIZE
 /* port: and their larger sound cache (halo_port_capacity.h) */
