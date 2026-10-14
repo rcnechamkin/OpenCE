@@ -205,6 +205,13 @@ window.HaloNet = (() => {
     return [address & 255, (address >>> 8) & 255, (address >>> 16) & 255, address >>> 24].join('.');
   }
 
+  function parseDotted(text) {
+    if (typeof text !== 'string') return null;
+    const parts = text.trim().split('.').map((n) => Number(n));
+    if (parts.length !== 4 || parts.some((n) => !Number.isInteger(n) || n < 0 || n > 255) || parts[0] !== 10) return null;
+    return (parts[0] | (parts[1] << 8) | (parts[2] << 16) | (parts[3] << 24)) >>> 0;
+  }
+
   // an address in 10.0.0.0/8, in network byte order (as web_net.c keeps it)
   function newAddress() {
     const bytes = random(3);
@@ -212,12 +219,20 @@ window.HaloNet = (() => {
   }
 
   class Room {
-    constructor(secret, brokers) {
+    constructor(secret, brokersOrOptions) {
+      const isOpts = brokersOrOptions && !Array.isArray(brokersOrOptions) && typeof brokersOrOptions === 'object';
+      const fixed = isOpts ? parseDotted(brokersOrOptions.address) : null;
       this.secret = secret;
-      this.brokerUrls = brokers;
-      this.id = hex(random(8));
-      this.address = newAddress();
-      this.addressFixed = false;
+      this.transport = isOpts && brokersOrOptions.transport ? brokersOrOptions.transport : null;
+      this.brokerUrls = isOpts ? (brokersOrOptions.brokers || []) : (brokersOrOptions || BROKERS);
+      this.iceServers = isOpts && Array.isArray(brokersOrOptions.iceServers)
+        ? brokersOrOptions.iceServers
+        : (this.transport ? [] : ICE_SERVERS);
+      this.id = isOpts && typeof brokersOrOptions.peerId === 'string' && /^[0-9a-f]{16}$/.test(brokersOrOptions.peerId)
+        ? brokersOrOptions.peerId
+        : hex(random(8));
+      this.address = fixed !== null ? fixed : newAddress();
+      this.addressFixed = fixed !== null;
       this.peers = new Map();
       this.byAddress = new Map();
       this.seen = new Map();
@@ -227,6 +242,23 @@ window.HaloNet = (() => {
     async start() {
       const { key, topic } = await deriveKeys(this.secret);
       this.key = key;
+      if (this.transport) {
+        const relay = {
+          ready: true,
+          publish: (payload) => this.transport.publish(payload, topic),
+          close: () => { if (this.transport.close) this.transport.close(); },
+        };
+        this.brokers = [relay];
+        if (this.transport.onMessage) {
+          this.transport.onMessage((payload) => {
+            const bytes = payload instanceof Uint8Array ? payload : new Uint8Array(payload);
+            this.message(bytes);
+          });
+        }
+        this.helloTimer = setInterval(() => this.tick(), HELLO_MS);
+        this.brokerReady();
+        return;
+      }
       this.brokers = this.brokerUrls.map((url) => new Broker(url, topic, (payload) => this.message(payload)));
       this.helloTimer = setInterval(() => this.tick(), HELLO_MS);
     }
@@ -284,6 +316,12 @@ window.HaloNet = (() => {
       } else if ((message.type === 'offer' || message.type === 'answer') && typeof message.sdp === 'string' &&
           message.sdp.length < MAXIMUM_MESSAGE) {
         this.description(message.from, address, message.type, message.sdp);
+      } else if (message.type === 'frame' && typeof message.data === 'string' && message.data.length <= MAXIMUM_FRAME * 2) {
+        const peer = this.peers.get(message.from);
+        if (peer && peer.open) {
+          const bytes = new Uint8Array((message.data.match(/../g) || []).map((pair) => parseInt(pair, 16)));
+          deliver(peer, Boolean(message.reliable), bytes);
+        }
       } else if (message.type === 'bye') {
         this.drop(message.from);
       }
@@ -311,7 +349,7 @@ window.HaloNet = (() => {
     }
 
     peer(id, address) {
-      const connection = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+      const connection = new RTCPeerConnection({ iceServers: this.iceServers });
       // (both ends make the same two channels: no negotiation of them)
       const reliable = connection.createDataChannel('streams', { negotiated: true, id: 0, ordered: true });
       const datagrams = connection.createDataChannel('datagrams', { negotiated: true, id: 1, ordered: false,
@@ -340,8 +378,9 @@ window.HaloNet = (() => {
 
     async gathered(connection) {
       if (connection.iceGatheringState === 'complete') return;
+      const waitMs = this.iceServers.length ? GATHER_MS : 300;
       await new Promise((resolve) => {
-        const timer = setTimeout(resolve, GATHER_MS);
+        const timer = setTimeout(resolve, waitMs);
         connection.addEventListener('icegatheringstatechange', () => {
           if (connection.iceGatheringState === 'complete') {
             clearTimeout(timer);
@@ -378,6 +417,10 @@ window.HaloNet = (() => {
           await peer.connection.setRemoteDescription({ type: 'offer', sdp });
           await peer.connection.setLocalDescription(await peer.connection.createAnswer());
           await this.gathered(peer.connection);
+          if (this.transport) {
+            peer.open = true;
+            changed();
+          }
           this.send({ type: 'answer', to: id, address: this.address, sdp: peer.connection.localDescription.sdp });
         } catch {
           this.drop(id, peer);
@@ -385,6 +428,10 @@ window.HaloNet = (() => {
       } else if (peer && peer.connection.signalingState === 'have-local-offer') {
         try {
           await peer.connection.setRemoteDescription({ type: 'answer', sdp });
+          if (this.transport) {
+            peer.open = true;
+            changed();
+          }
         } catch {
           this.drop(id, peer);
         }
@@ -425,11 +472,17 @@ window.HaloNet = (() => {
       for (const peer of targets) {
         if (!peer || !peer.open) continue;
         const channel = reliable ? peer.reliable : peer.datagrams;
-        if (!reliable && channel.bufferedAmount > DATAGRAM_BUFFERED_LIMIT) continue;
-        try {
-          channel.send(bytes);
-        } catch {
-          // (a channel closing: its peer goes with it)
+        if (channel && channel.readyState === 'open') {
+          if (!reliable && channel.bufferedAmount > DATAGRAM_BUFFERED_LIMIT) continue;
+          try {
+            channel.send(bytes);
+            continue;
+          } catch {
+            // fall through to sealed transport relay if DataChannel send fails
+          }
+        }
+        if (this.transport) {
+          this.send({ type: 'frame', to: peer.id, address: this.address, reliable: Boolean(reliable), data: hex(bytes) });
         }
       }
     }
@@ -475,14 +528,30 @@ window.HaloNet = (() => {
   }
 
   return {
-    // joins the room of a secret (32 hex digits); returns its status
-    async join(secretHex, brokers) {
+    // joins the room of a secret (32 hex digits); accepts broker URLs or { transport, address, iceServers, peerId }
+    async join(secretHex, brokersOrOptions) {
       if (room) room.leave();
       const secret = new Uint8Array(secretHex.match(/../g).map((pair) => parseInt(pair, 16)));
-      room = new Room(secret, brokers && brokers.length ? brokers : BROKERS);
+      const arg = Array.isArray(brokersOrOptions)
+        ? (brokersOrOptions.length ? brokersOrOptions : BROKERS)
+        : (brokersOrOptions && typeof brokersOrOptions === 'object' ? brokersOrOptions : BROKERS);
+      room = new Room(secret, arg);
       await room.start();
       changed();
       return status();
+    },
+    // delivers a sealed signaling payload from a local transport (e.g. Avrana LAN long-poll)
+    async receiveSignal(payload) {
+      if (room) await room.message(payload instanceof Uint8Array ? payload : new Uint8Array(payload));
+    },
+    peers() {
+      if (!room) return [];
+      return [...room.peers.values()].map((p) => ({
+        id: p.id,
+        address: dotted(p.address),
+        rawAddress: p.address,
+        open: p.open,
+      }));
     },
     // a new room's secret
     newSecret() {
