@@ -180,7 +180,7 @@ def generate_web_build(n: Writer, sln: Any) -> None:
     semantics_header = sln.build_dir / "linux" / "halo_msvc_semantics.h"
     platform_semantics_header = sln.build_dir / "linux" / "platform_msvc_semantics.h"
     prefix_header = LINUX_DIR / "include" / "halo_linux_prefix.h"
-    sdl_flag = f"--use-port={SDL_PORT}"
+    sdl_flag = f"--use-port={SDL_PORT.as_posix()}"
 
     n.comment("Web build (ninja web); see port/web/README.md")
     n.variable("web_emcc", _quote(emcc))
@@ -198,14 +198,22 @@ def generate_web_build(n: Writer, sln: Any) -> None:
     sdl_stamp = build_dir / "sdl3.stamp"
     sdl_license = build_dir / "SDL3-LICENSE.txt"
     em_config = Path(emcc).with_name("em-config")
-    n.rule(
-        name="web_sdl3",
-        command=f"echo '#include <SDL3/SDL.h>' > $out.c && $web_emcc {sdl_flag} -pthread -c $out.c -o $out.o && "
-                f"rm -f $out.c $out.o && cp \"$$({_quote(em_config)} CACHE)/ports/halo_sdl3/SDL-{SDL_TAG}/LICENSE.txt\" "
-                f"{sdl_license} && touch $out",
-        description="WEB SDL3 (Emscripten port, fetched and built once)",
-        pool="console",
-    )
+    if os.name == "nt":
+        n.rule(
+            name="web_sdl3",
+            command=f"$python tools/web_sdl3.py $web_emcc {SDL_PORT} {SDL_TAG} $out {sdl_license}",
+            description="WEB SDL3 (Emscripten port, fetched and built once)",
+            pool="console",
+        )
+    else:
+        n.rule(
+            name="web_sdl3",
+            command=f"echo '#include <SDL3/SDL.h>' > $out.c && $web_emcc {sdl_flag} -pthread -c $out.c -o $out.o && "
+                    f"rm -f $out.c $out.o && cp \"$$({_quote(em_config)} CACHE)/ports/halo_sdl3/SDL-{SDL_TAG}/LICENSE.txt\" "
+                    f"{sdl_license} && touch $out",
+            description="WEB SDL3 (Emscripten port, fetched and built once)",
+            pool="console",
+        )
     n.build(outputs=sdl_stamp, implicit_outputs=[sdl_license], rule="web_sdl3", implicit=[SDL_PORT])
 
     abi = " ".join(WEB_ABI_FLAGS + configuration_defines(sln))
@@ -326,22 +334,38 @@ def generate_web_build(n: Writer, sln: Any) -> None:
         f"-sASSERTIONS={0 if release else 1}",
         # function names in stack traces (the name section only)
         "--profiling-funcs",
-        f"--js-library {library_js}",
-        f"--pre-js {pre_js}",
+        f"--js-library {Path(library_js).as_posix()}",
+        f"--pre-js {Path(pre_js).as_posix()}",
     ]
-    n.rule(
-        name="web_link",
-        command="$web_emcc $ldflags -o $out @$out.rsp",
-        description="WEB LINK $out",
-        rspfile="$out.rsp",
-        rspfile_content="$in_newline",
-    )
+    if os.name == "nt":
+        n.rule(
+            name="web_link",
+            command="$python tools/web_link.py $web_emcc $ldflags -o $out @$out.rsp",
+            description="WEB LINK $out",
+            rspfile="$out.rsp",
+            rspfile_content="$in_newline",
+        )
+    else:
+        n.rule(
+            name="web_link",
+            command="$web_emcc $ldflags -o $out @$out.rsp",
+            description="WEB LINK $out",
+            rspfile="$out.rsp",
+            rspfile_content="$in_newline",
+        )
     n.build(outputs=halo_js, implicit_outputs=[halo_wasm], rule="web_link", inputs=objects,
             implicit=[library_js, pre_js, SDL_PORT, sdl_stamp], variables={"ldflags": " ".join(link_flags)})
 
     # ---------- the site: the page, its service worker and the importer
 
-    n.rule(name="web_copy", command="cp $in $out", description="WEB STAGE $out")
+    if os.name == "nt":
+        n.rule(
+            name="web_copy",
+            command='$python -c "import shutil,sys,pathlib; pathlib.Path(sys.argv[2]).parent.mkdir(parents=True, exist_ok=True); shutil.copyfile(sys.argv[1], sys.argv[2])" $in $out',
+            description="WEB STAGE $out",
+        )
+    else:
+        n.rule(name="web_copy", command="cp $in $out", description="WEB STAGE $out")
     site_files: List[Path] = []
     for source in site_sources():
         target = site_dir / source.relative_to(PORT_DIR / "site")
