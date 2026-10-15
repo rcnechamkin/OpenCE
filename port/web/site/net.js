@@ -316,12 +316,6 @@ window.HaloNet = (() => {
       } else if ((message.type === 'offer' || message.type === 'answer') && typeof message.sdp === 'string' &&
           message.sdp.length < MAXIMUM_MESSAGE) {
         this.description(message.from, address, message.type, message.sdp);
-      } else if (message.type === 'frame' && typeof message.data === 'string' && message.data.length <= MAXIMUM_FRAME * 2) {
-        const peer = this.peers.get(message.from);
-        if (peer && peer.open) {
-          const bytes = new Uint8Array((message.data.match(/../g) || []).map((pair) => parseInt(pair, 16)));
-          deliver(peer, Boolean(message.reliable), bytes);
-        }
       } else if (message.type === 'bye') {
         this.drop(message.from);
       }
@@ -417,10 +411,6 @@ window.HaloNet = (() => {
           await peer.connection.setRemoteDescription({ type: 'offer', sdp });
           await peer.connection.setLocalDescription(await peer.connection.createAnswer());
           await this.gathered(peer.connection);
-          if (this.transport) {
-            peer.open = true;
-            changed();
-          }
           this.send({ type: 'answer', to: id, address: this.address, sdp: peer.connection.localDescription.sdp });
         } catch {
           this.drop(id, peer);
@@ -428,10 +418,6 @@ window.HaloNet = (() => {
       } else if (peer && peer.connection.signalingState === 'have-local-offer') {
         try {
           await peer.connection.setRemoteDescription({ type: 'answer', sdp });
-          if (this.transport) {
-            peer.open = true;
-            changed();
-          }
         } catch {
           this.drop(id, peer);
         }
@@ -476,13 +462,10 @@ window.HaloNet = (() => {
           if (!reliable && channel.bufferedAmount > DATAGRAM_BUFFERED_LIMIT) continue;
           try {
             channel.send(bytes);
-            continue;
           } catch {
-            // fall through to sealed transport relay if DataChannel send fails
+            // (a frame that cannot go is lost, as on a network: game traffic
+            // never goes through the signaling relay)
           }
-        }
-        if (this.transport) {
-          this.send({ type: 'frame', to: peer.id, address: this.address, reliable: Boolean(reliable), data: hex(bytes) });
         }
       }
     }
