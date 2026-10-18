@@ -471,6 +471,21 @@ static boolean scenario_check_scripts(
 	long index;
 	char const *error = NULL;
 
+	/* (the roots are nodes' indices, which can look like pointers into the
+	tags) */
+	for (index = 0; index < scenario->hs_scripts.count; index++)
+	{
+		struct hs_script const *script = (struct hs_script const *)scenario->hs_scripts.address + index;
+
+		tag_validate_opaque(&script->root_expression_index, sizeof(script->root_expression_index));
+	}
+	for (index = 0; index < scenario->hs_globals.count; index++)
+	{
+		struct hs_global const *global = (struct hs_global const *)scenario->hs_globals.address + index;
+
+		tag_validate_opaque(&global->initialization_expression_index, sizeof(global->initialization_expression_index));
+	}
+
 	/* (hs.c finds a header that is not its own damaged, and runs no
 	scripts) */
 	if (scenario->hs_syntax_data.size != HS_SYNTAX_DATA_SIZE ||

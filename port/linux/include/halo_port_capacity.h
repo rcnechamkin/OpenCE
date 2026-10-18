@@ -15,6 +15,31 @@ client's own objects take the upper half of the object array).
 #ifndef __HALO_PORT_CAPACITY_H
 #define __HALO_PORT_CAPACITY_H
 
+/* ---------- the memory window
+
+The Xbox maps its memory at 0x80000000, and the game's fixed addresses (its
+game state, its tag cache) are in that window, as are the pointers in a
+map's tags, which are linked to the tag cache's address. The native builds
+reserve the window where the Xbox has it. The web build has it lower, at
+0x10000000: a WebAssembly memory holds every address below the window's end,
+and 0x88000000 bytes is more than a phone's browser gives a page. A map's
+pointers are moved to the web build's window as its tags and structure bsps
+load (port/linux/game/tag_validate.c, tag_validate_relocated); in the other
+builds the window is the Xbox's and nothing moves. */
+
+#define HALO_PORT_XBOX_WINDOW_BASE 0x80000000UL
+#if defined(HALO_WEB)
+#define HALO_PORT_WINDOW_BASE 0x10000000UL
+#else
+#define HALO_PORT_WINDOW_BASE HALO_PORT_XBOX_WINDOW_BASE
+#endif
+/* an address of the Xbox's window, where this build's window has it */
+#define HALO_PORT_WINDOW_ADDRESS(xbox_address) \
+	((unsigned long)(xbox_address) - HALO_PORT_XBOX_WINDOW_BASE + HALO_PORT_WINDOW_BASE)
+/* the tag cache's address on the Xbox, which every map is linked to
+(cache/physical_memory_map.c) */
+#define HALO_PORT_XBOX_TAG_CACHE_ADDRESS 0x803A6000UL
+
 /* ---------- game state
 
 The Xbox game state is 0x345000 bytes at 0x80061000 and ends where the tag
@@ -30,7 +55,7 @@ fill 3,165,260 of its 0x305000 bytes); the GPU part holds only the decal
 vertices, as on the Xbox. A change to a pool's size changes the game state's
 layout: saved games of builds before it no longer load. */
 
-#define HALO_PORT_GAME_STATE_BASE_ADDRESS 0x81A00000 /* (0x80061000) */
+#define HALO_PORT_GAME_STATE_BASE_ADDRESS HALO_PORT_WINDOW_ADDRESS(0x81A00000) /* (0x80061000) */
 #define HALO_PORT_GAME_STATE_CPU_SIZE 0x13C0000 /* (0x305000) */
 #define HALO_PORT_GAME_STATE_GPU_SIZE 0x40000 /* (0x40000) */
 #define HALO_PORT_GAME_STATE_SIZE (HALO_PORT_GAME_STATE_CPU_SIZE+HALO_PORT_GAME_STATE_GPU_SIZE)

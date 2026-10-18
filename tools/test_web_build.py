@@ -40,7 +40,9 @@ def graph(release=False, emcc="/opt/emsdk/upstream/emscripten/emcc"):
     sln = SimpleNamespace(build_dir=Path("build"), web_emcc=emcc, port_release=release, port_profile=False,
                           compiler_launcher=None)
     web_build.generate_web_build(ninja_syntax.Writer(out), sln)
-    return re.sub(r" \$\n +", " ", out.getvalue())
+    # Ninja uses the host's path separators. These assertions describe the same
+    # graph on Windows and POSIX; normalise only the test's textual view of it.
+    return re.sub(r" \$\n +", " ", out.getvalue()).replace("\\", "/")
 
 
 def compile_flags(text, source):
@@ -102,7 +104,7 @@ def test_the_link_makes_the_memory_the_window_needs():
                  "-sMAX_WEBGL_VERSION=2", "-sWASMFS=1", "-lopfs.js", "-sALLOW_MEMORY_GROWTH=0",
                  "-Wl,--fatal-warnings", "-sASSERTIONS=1", "--profiling-funcs"):
         assert flag in flags, flag
-    assert f"-sINITIAL_MEMORY={0x88000000}" in flags
+    assert f"-sINITIAL_MEMORY={0x18000000}" in flags
     release = graph(release=True)
     assert "-DHALO_RELEASE" in compile_flags(release, "source/main/main.c")
     assert "-sASSERTIONS=0" in link_flags(release).split()
@@ -110,7 +112,11 @@ def test_the_link_makes_the_memory_the_window_needs():
 
 def test_the_memory_layout_agrees_with_the_sources():
     platform = (ROOT / "port/linux/src/platform.h").read_text()
-    base = int(re.search(r"#define PLATFORM_CONTIGUOUS_BASE (0x[0-9A-Fa-f]+)", platform).group(1), 16)
+    capacity = (ROOT / "port/linux/include/halo_port_capacity.h").read_text()
+    assert "#define PLATFORM_CONTIGUOUS_BASE HALO_PORT_WINDOW_BASE" in platform
+    window = re.search(r"#if defined\(HALO_WEB\)\s*#define HALO_PORT_WINDOW_BASE (0x[0-9A-Fa-f]+)", capacity)
+    assert window, "halo_port_capacity.h gives the web build its own window"
+    base = int(window.group(1), 16)
     sizes = re.search(r"#if defined\(HALO_ARM64_GUEST\) \|\| defined\(HALO_WEB\).*?#define PLATFORM_CONTIGUOUS_SIZE "
                       r"(0x[0-9A-Fa-f]+)", platform, re.S)
     assert sizes, "platform.h gives the web build the 128 MB window"

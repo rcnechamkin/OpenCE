@@ -253,7 +253,16 @@ LPVOID WINAPI XPhysicalAlloc(SIZE_T size, ULONG_PTR physical_address, ULONG_PTR 
 	/* A highest-acceptable address inside the window places the block
 	there, which is how the game gets its fixed game state and tag cache
 	addresses; anything else may go anywhere. */
-	void *result = platform_contiguous_alloc(size, alignment,
+	void *result;
+
+#ifdef HALO_WEB
+	/* (the game asks for those by their address with the top bit cleared,
+	which on the Xbox is the physical address: this build's window is lower,
+	halo_port_capacity.h, and that is still its address in the window) */
+	if (physical_address >= PLATFORM_CONTIGUOUS_BASE && physical_address - PLATFORM_CONTIGUOUS_BASE < PLATFORM_CONTIGUOUS_SIZE)
+		physical_address -= PLATFORM_CONTIGUOUS_BASE;
+#endif
+	result = platform_contiguous_alloc(size, alignment,
 		physical_address < PLATFORM_CONTIGUOUS_SIZE ? physical_address : PLATFORM_ANY_PHYSICAL_ADDRESS,
 		protect);
 

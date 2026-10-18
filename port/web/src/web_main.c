@@ -28,12 +28,14 @@ void web_js_post(int kind, const char *text);
 
 /* ---------- memory
 
-The Xbox window (port/linux/src/platform.h) is the top 128 MB of the
-WebAssembly memory, 0x80000000 to 0x88000000 (tools/web_build.py makes the
-memory that size). sbrk grows the C heap up to the heap size this reports,
-so reporting the window's start keeps the heap below it. */
+The memory window (port/linux/src/platform.h; the Xbox's, moved down:
+halo_port_capacity.h) is the top 128 MB of the WebAssembly memory,
+0x10000000 to 0x18000000 (tools/web_build.py makes the memory that size).
+sbrk grows the C heap up to the heap size this reports, so reporting the
+window's start keeps the heap below it: 256 MB, where the heaviest levels
+use about 136 MB. */
 
-#define WEB_HEAP_LIMIT 0x80000000UL
+#define WEB_HEAP_LIMIT 0x10000000UL
 
 size_t emscripten_get_heap_size(void)
 {

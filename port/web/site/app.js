@@ -30,7 +30,7 @@ then fills the page.
 const $ = (id) => document.getElementById(id);
 const params = new URLSearchParams(location.search);
 // the Xbox window ends the game's memory: tools/web_build.py WEB_MEMORY_BYTES
-const WEB_MEMORY_BYTES = 0x88000000;
+const WEB_MEMORY_BYTES = 0x18000000;
 const MAXIMUM_LOG_LINES = 20000;
 
 // ---------- the log: the game's output, for the player to send
@@ -207,8 +207,8 @@ async function runChecks() {
   const opfs = !!(navigator.storage && navigator.storage.getDirectory);
   addCheck('opfs', opfs ? 'good' : 'bad', "The site's private storage (OPFS)");
   const memory = window.crossOriginIsolated && memoryAvailable();
-  addCheck('memory', memory ? 'good' : 'bad', 'Memory for the game (2.1 GB)',
-    memory ? '' : 'this browser could not give the game that much: a 64-bit browser on a computer has it');
+  addCheck('memory', memory ? 'good' : 'bad', 'Memory for the game (384 MB)',
+    memory ? '' : 'this browser could not give the game that much');
   const required = ['secure', 'isolated', 'webgl', 'opfs', 'memory'];
   return required.every((name) => results[name] === 'good');
 }
