@@ -1286,6 +1286,8 @@ static void structure_vertex_buffer_check(
 	};
 	void *data;
 
+	/* (its buffer is the bsp header's, by its address in the bsp: tag_validate_relocated) */
+	vertices->hardware_format = tag_validate_relocated(vertices->hardware_format);
 	if (!vertices->hardware_format)
 		return;
 	/* (a Custom Edition map's bsp has none: its materials are given theirs as

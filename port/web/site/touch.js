@@ -40,6 +40,9 @@ window.HaloTouch = (() => {
   const FLOATING_ZONE_TOP = 0.35;
   const VIBRATION_MS = 110;
   const VIBRATION_RENEW_MS = 70;
+  // no control smaller than a thumb: 44 x 44 CSS pixels (Apple HIG, WCAG 2.5.5), whatever the screen; on
+  // today's phones in landscape the larger controls never meet (AVR-467)
+  const MINIMUM_TARGET = 44;
 
   // each control: its SDL button bit or trigger (axis 4 left, 5 right), the
   // game's controller button that names it (input.h), its label, its place on
@@ -92,6 +95,8 @@ window.HaloTouch = (() => {
     return touchscreen && !pads;
   }
 
+  const radiusOf = (control, scale) => Math.max(control.radius * scale.size, MINIMUM_TARGET / 2);
+
   // pixels per grid unit across, down, and for sizes
   function scales() {
     const width = overlay.clientWidth;
@@ -102,7 +107,7 @@ window.HaloTouch = (() => {
   function layout() {
     const scale = scales();
     for (const control of CONTROLS) {
-      const radius = control.radius * scale.size;
+      const radius = radiusOf(control, scale);
       Object.assign(control.element.style, {
         left: `${control.x * scale.x - radius}px`,
         top: `${control.y * scale.y - radius}px`,
@@ -174,7 +179,7 @@ window.HaloTouch = (() => {
     let bestDistance = Infinity;
     for (const control of CONTROLS) {
       const distance = Math.hypot(x - control.x * scale.x, y - control.y * scale.y);
-      if (distance <= control.radius * scale.size * 1.15 && distance < bestDistance) {
+      if (distance <= radiusOf(control, scale) * 1.15 && distance < bestDistance) {
         best = control;
         bestDistance = distance;
       }

@@ -400,6 +400,9 @@ static boolean model_geometry_part_check(
 		part->triangles.count = 0;
 		part->triangles.address = NULL;
 	}
+	/* (its buffers are the header's, by their address in the tags: tag_validate_relocated) */
+	vertex_buffer->hardware_format = tag_validate_relocated(vertex_buffer->hardware_format);
+	triangle_buffer->hardware_format = tag_validate_relocated(triangle_buffer->hardware_format);
 	if (!vertex_buffer->hardware_format || !triangle_buffer->hardware_format)
 		return TRUE;
 	vertices = tag_validate_vertex_buffer_data(validation, vertex_buffer->hardware_format);

@@ -320,6 +320,29 @@ boolean tag_validate_structure_bsp(
 	void *base,
 	long size);
 
+/* a pointer of a map's (into the Xbox's tag cache, 0x803A6000) where this
+build's tag cache has it, or address itself (tag_validate.c, "moving a map's
+pointers") */
+void *tag_validate_relocated(
+	void const *address);
+/* the pointers of the tags' header and table read to tag_header (tag_data_size
+bytes), moved where this build's tag cache has them: before anything reads
+them (tag_validate_tags also does) */
+void tag_validate_relocate_tags(
+	void *tag_header,
+	long tag_data_size);
+/* the pointers of a structure bsp's header just read (size bytes at base),
+moved (tag_validate_structure_bsp also does) */
+void tag_validate_relocate_structure_bsp(
+	void *base,
+	long size);
+
+/* the size bytes at address hold no pointer, whatever they look like (a
+script's root node's index): the sweep for pointers the schema doesn't list
+leaves them as they are (tag_validate.c, relocate_shaped_pointers) */
+void tag_validate_opaque(
+	void const *address,
+	unsigned long size);
 /* how many corrections the last validation made (none for a retail map) */
 long tag_validate_corrections(
 	void);
